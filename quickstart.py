@@ -2,22 +2,15 @@
 from __future__ import print_function
 import httplib2
 import os
+import sys
 
 from apiclient import discovery
 import oauth2client
 from oauth2client import client
 from oauth2client import tools
 
-'''
-try:
-    import argparse
-    flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
-except ImportError:
-    flags = None
-'''
+#Future: Migrate from Drive v2 to v3
 
-import sys
-flags = None
 
 # If modifying these scopes, delete your previously saved credentials
 # at ~/.credentials/drive-python-quickstart.json
@@ -26,7 +19,7 @@ CLIENT_SECRET_FILE = 'client_secret.json'
 APPLICATION_NAME = 'ResumeLoader'
 
 
-def get_credentials():
+def get_credentials(flags):
     """Gets valid user credentials from storage.
 
     If nothing has been stored, or if the stored credentials are invalid,
@@ -35,12 +28,12 @@ def get_credentials():
     Returns:
         Credentials, the obtained credential.
     """
-    home_dir = os.path.expanduser('~')
-    credential_dir = os.path.join(home_dir, '.credentials')
+    working_dir = os.getcwd() #might not work on mac
+    credential_dir = os.path.join(working_dir, '.credentials')
     if not os.path.exists(credential_dir):
         os.makedirs(credential_dir)
     credential_path = os.path.join(credential_dir,
-                                   'drive-python-quickstart.json')
+                                   'credentials-ResumeLoader.json')
 
     store = oauth2client.file.Storage(credential_path)
     credentials = store.get()
@@ -51,6 +44,7 @@ def get_credentials():
             credentials = tools.run_flow(flow, store, flags)
         else: # Needed only for compatibility with Python 2.6
             credentials = tools.run(flow, store)
+        flags = None
         print('Storing credentials to ' + credential_path)
     return credentials
 
@@ -64,37 +58,86 @@ def find_folder(service,q):
     else:
         return None
 
-def main(argv):
-    """Shows basic usage of the Google Drive API.
+#Future: Identify if the query produces only 1 result, if it does then construct a
+#           folder that adopts all characteristics of the query
+'''
+def produce_folder(service,name,q):
+    results = service.files().list(
+        pageSize=1, q = q, fields="nextPageToken, files(id, name)").execute()
+    results = results.get('files',[])
+    if len(results) == 0:
+        return results[0]
+    else:
+        return None
+'''
 
-    Creates a Google Drive API service object and outputs the names and IDs
-    for up to 10 files.
-    """
-    credentials = get_credentials()
+MIMETYPE_FOLDER = 'application/vnd.google-apps.folder'
+MIMETYPE_FILE = 'application/vnd.google-apps.file'
+
+FOLDER_NAME_JOBAPPLICATIONS = "Job Applications"
+FILE_NAME_RESUME = "Resume"
+FILE_NAME_COVERLETTER = "CoverLetter"
+
+def retrieve_folder_JobApplications(service):
+    # find folder Job Applications
+    query_folder_jobapplications = \
+        'name = "'+FOLDER_NAME_JOBAPPLICATIONS+'" and ' + \
+        'mimeType = "'+MIMETYPE_FOLDER+'"'
+    folder = find_folder(service,query_folder_jobapplications)
+    if not folder:
+        folder_metadata = {
+            'name' : FOLDER_NAME_JOBAPPLICATIONS,
+            'mimeType' : MIMETYPE_FOLDER
+        }
+        folder = service.files().create(body=folder_metadata, fields='id').execute().get('id')
+    else:
+        folder = folder['id']
+
+    folder_jobapplications = str(folder)
+
+    return folder_jobapplications
+
+def retrieve_files_templates(service,folder_jobapplications):
+    # find the template files Cover Letter and Resume in Job Applications
+    query_files_templates = \
+        '"'+folder_jobapplications+'" in parents and ' + \
+        '(name = "'+FILE_NAME_RESUME+'" or ' + \
+        'name = "'+FILE_NAME_COVERLETTER+'")'
+    files = service.files().list(
+        pageSize=2, q=query_files_templates, fields="files(id, name)").execute()
+    files_templates = files.get('files', [])
+
+    file_resume = None
+    file_coverletter = None
+    if files_templates[0]['name'] == FILE_NAME_RESUME:
+        file_resume = files_templates[0]['id']
+        file_coverletter = files_templates[1]['id']
+    else:
+        file_resume = files_templates[1]['id']
+        file_coverletter = files_templates[0]['id']
+
+    file_resume = str(file_resume)
+    file_coverletter = str(file_coverletter)
+
+    return {'resume':file_resume,'coverletter':file_coverletter}
+
+
+
+def main(flags,company_name,position_name,description):
+
+    #pre-amble
+    #   * grab credentials and construct the service 
+    credentials = get_credentials(flags)
     http = credentials.authorize(httplib2.Http())
     service = discovery.build('drive', 'v3', http=http)
 
     ##
 
-    # find folder Job Applications
-    q_ja = "name = 'Job Applications'"
-    folder = find_folder(service,q_ja)
-    ja_folder_id = folder['id']
-    
-    print('Job Applications Folder ID: \n\t'+str(ja_folder_id))
+    folder_jobapplications = retrieve_folder_JobApplications(service)
+    print('Job Applications Folder: \n\t'+folder_jobapplications)
 
-    # find the template files Cover Letter and Resume in Job Applications
-    q_ja_cvres = "'"+str(ja_folder_id)+"' in parents and (name = 'Cover Letter' or name = 'Resume' or name = 'Description')"
-    results = service.files().list(
-        pageSize=3, q = q_ja_cvres, fields="nextPageToken, files(id, name)").execute()
-    cvres_ids = results.get('files', [])
-
-    print('Template CoverLetter and Resume Ids: \n\t'+str(cvres_ids[0]['id'])+',\n\t'+str(cvres_ids[1]['id']))
-
-    # copy both template files and put the in company folder with new Description file
-    company_name = argv[0]
-    position_name = argv[1]
-    tag = argv[2]
+    files_templates = retrieve_files_templates(service,folder_jobapplications)
+    print('Template CoverLetter and Resume Ids: \n\t'+files_templates['resume']+'\n\t'+files_templates['coverletter'])
 
     #find out if company name already exists, if not then create it and store info
     company_folder_id = None
@@ -124,9 +167,17 @@ def main(argv):
 
 
 
+import argparse
 
 if __name__ == '__main__':
-    if len(sys.argv) == 4:
-        main(sys.argv[1:])
-    else:
-        print('failed')
+    parser = argparse.ArgumentParser(parents=[tools.argparser])
+    parser.add_argument('--cname',required=True)
+    parser.add_argument('--pname',required=True)
+    parser.add_argument('--desc')
+
+    flags = parser.parse_args()
+    company_name = flags.cname
+    position_name = flags.pname
+    description = flags.desc
+
+    main(flags,company_name,position_name,description)
