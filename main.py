@@ -51,7 +51,7 @@ def get_credentials(flags):
 #   * name
 #   * parent (one parent)
 #   * mimeType
-#   * trashed
+#   * trashed (default: false)
 def construct_querystring(props):
     q = None
     if type(props) is dict:
@@ -62,7 +62,7 @@ def construct_querystring(props):
             if prop == 'parents':
                 q += '"'+str(props[prop][0])+'" in '+str(prop)
             elif prop == 'trashed':
-                q += str(props[prop])+' = '+str(prop)
+                q += str(prop)+' = '+str(props[prop])
                 trashed_specified = True
             elif prop == 'name' or prop == 'mimeType':
                 q += str(prop)+' = "'+str(props[prop])+'"'
@@ -71,7 +71,6 @@ def construct_querystring(props):
         if not trashed_specified:
             q += ' and trashed = False'
         q = q[5:]
-    print(q)
     return q
 
 
@@ -113,13 +112,40 @@ def produce_file(service,file_metadata,file_metadata_template=None):
 
     return (file_target,created)
 
-#create a new folder in the folder identified by folder_metadata that...
-#   creates a folder with the 
-def cascade(service,folder_metadata):
-    '''TODO'''
-    pass
+#Find a file matching file_metadata from the folders heiarchy
+#of the folder_target (id) and copy that file from the closest
+#avaiable parent to the folder_target
+# In:   file_metadata = target file descriptor that is to be cascaded
+#       folder_taret = target folder to be reached by the end of the cascade
+# Out:  file_target = the id of the copy of the target file in folder_target
+def cascade_file(service,file_metadata,folder_target):
+    file_target = None
 
+    file_template = None
+    folder_targets = []
 
+    current_folder = folder_target
+    while not file_template and current_folder:
+        print(file_template)
+        print(current_folder)
+        file_metadata['parents'] = [ current_folder ]
+        file_template = find_file(service,file_metadata)
+        folder_targets.insert(0,current_folder)
+        current_folder = service.files().get(fileId=current_folder,fields='parents').execute().get('parents')
+        if current_folder:
+            current_folder = current_folder[0]
+    if not current_folder:
+        print ('CASCADE_FILE ERROR: Can not find template file in folder parent structure')
+        raise
+    folder_targets.pop(0)
+
+    for folder_target in folder_targets:
+        file_metadata['parents'] = [ folder_target ]
+        file_target = str(service.files().copy(fileId=file_template,body=file_metadata,fields='id').execute().get('id'))
+
+    del file_metadata['parents']
+
+    return file_target
 
 
 
@@ -151,7 +177,7 @@ def main(flags,company_name,position_name,description):
         'name' : company_name,
         'mimeType' : MIMETYPE_FOLDER,
         'parents' : [ folder_jobapplications ],
-        'properties': { 'ResumeLoaderTag': 'company' },
+        'appProperties' : { 'tag' : 'company' },
     }
     folder_company,created = produce_file(service,folder_metadata_company)
     print('Company Folder: '+folder_company)
@@ -160,7 +186,7 @@ def main(flags,company_name,position_name,description):
         'name' : position_name,
         'mimeType' : MIMETYPE_FOLDER,
         'parents' : [ folder_company ],
-        'properties': { 'ResumeLoaderTag': 'position' },
+        'appProperties' : { 'tag' : 'position' },
     }
     folder_position,created = produce_file(service,folder_metadata_position)
     if not created:
@@ -173,33 +199,15 @@ def main(flags,company_name,position_name,description):
     file_metadata_resume = {
         'name' : FILE_NAME_RESUME,
         'mimeType' : MIMETYPE_FILE,
-        'parents' : [ folder_position ],
     }
-    file_metadata_template_resume = {
-        'name' : FILE_NAME_RESUME,
-        'mimeType' : MIMETYPE_FILE,
-        'parents' : [ folder_jobapplications ],
-    }
-    
-    q = construct_querystring(file_metadata_template_resume)
-    results = service.files().list(pageSize=1, q=q, fields='files(mimeType)').execute().get('files')
-    print('MIMETYPE: '+str(results[0]['mimeType']))
-
-
-    file_template_resume = produce_file(service,file_metadata_resume,file_metadata_template_resume)
+    file_template_resume = cascade_file(service,file_metadata_resume,folder_position)
 
 
     file_metadata_coverletter = {
         'name' : FILE_NAME_COVERLETTER,
         'mimeType' : MIMETYPE_FILE,
-        'parents' : [ folder_position ],
     }
-    file_metadata_template_coverletter = {
-        'name' : FILE_NAME_COVERLETTER,
-        'mimeType' : MIMETYPE_FILE,
-        'parents' : [ folder_jobapplications ],
-    }
-    file_template_coverletter = produce_file(service,file_metadata_coverletter,file_metadata_template_coverletter)
+    file_template_coverletter = cascade_file(service,file_metadata_coverletter,folder_position)
 
     file_metadata_description = {
         'name' : 'Description',
