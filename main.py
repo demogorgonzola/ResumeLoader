@@ -49,9 +49,10 @@ def get_credentials(flags):
 
 #currently works with:
 #   * name
-#   * parent (one parent)
+#   * parents
 #   * mimeType
 #   * trashed (default: false)
+#   * appProperties
 def construct_querystring(props):
     q = None
     if type(props) is dict:
@@ -60,10 +61,20 @@ def construct_querystring(props):
         for prop in props:
             q += ' and '
             if prop == 'parents':
-                q += '"'+str(props[prop][0])+'" in '+str(prop)
+                parents = props[prop]
+                for parent in parents:
+                    q += '"'+str(parent)+'" in '+str(prop)
+                    q += ' and '
+                q = q[:len(q)-5]
             elif prop == 'trashed':
                 q += str(prop)+' = '+str(props[prop])
                 trashed_specified = True
+            elif prop == 'appProperties':
+                appProps = props[prop]
+                for appProp in appProps:
+                    q += str(prop)+' has { key="'+str(appProp)+'" and value="'+str(appProps[appProp])+'" }'
+                    q += ' and '
+                q = q[:len(q)-5]
             elif prop == 'name' or prop == 'mimeType':
                 q += str(prop)+' = "'+str(props[prop])+'"'
             else:
@@ -126,8 +137,6 @@ def cascade_file(service,file_metadata,folder_target):
 
     current_folder = folder_target
     while not file_template and current_folder:
-        print(file_template)
-        print(current_folder)
         file_metadata['parents'] = [ current_folder ]
         file_template = find_file(service,file_metadata)
         folder_targets.insert(0,current_folder)
@@ -186,12 +195,16 @@ def main(flags,company_name,position_name,description):
         'name' : position_name,
         'mimeType' : MIMETYPE_FOLDER,
         'parents' : [ folder_company ],
-        'appProperties' : { 'tag' : 'position' },
+        'appProperties' : { 'tag' : 'position', 'actual_name' : position_name },
+        'description' : description,
     }
     folder_position,created = produce_file(service,folder_metadata_position)
     if not created:
-        print('Error: Position already exists!!!')
-        raise
+        name_and_createdTime = service.files().get(fileId=folder_position,fields='name,createdTime').execute()
+        name = str(name_and_createdTime.get('name'))
+        createdTime = str(name_and_createdTime.get('createdTime'))
+        service.files().update(fileId=folder_position,body={ 'name' : name+' - '+createdTime }).execute()
+        folder_position,created = produce_file(service,folder_metadata_position)
     print('Position Folder: '+folder_position)
 
     ##
