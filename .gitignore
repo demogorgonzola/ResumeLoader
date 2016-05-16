@@ -1,3 +1,5 @@
 resources
 .credentials
 client_secret.json
+ResumeLoader.sublime-workspace
+*.pyc
